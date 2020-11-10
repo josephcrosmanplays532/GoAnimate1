@@ -1,0 +1,279 @@
+const sessions = require('../data/sessions');
+const fUtil = require('../fileUtil');
+const stuff = require('./info');
+
+function toAttrString(table) {
+	return typeof (table) == 'object' ? Object.keys(table).filter(key => table[key] !== null).map(key =>
+		`${encodeURIComponent(key)}=${encodeURIComponent(table[key])}`).join('&') : table.replace(/"/g, "\\\"");
+}
+function toParamString(table) {
+	return Object.keys(table).map(key =>
+		`<param name="${key}" value="${toAttrString(table[key])}">`
+	).join(' ');
+}
+function toObjectString(attrs, params) {
+	return `<object id="obj" ${Object.keys(attrs).map(key =>
+		`${key}="${attrs[key].replace(/"/g, "\\\"")}"`
+	).join(' ')}>${toParamString(params)}</object>`;
+}
+
+module.exports = function (req, res, url) {
+	if (req.method != 'GET') return;
+	const query = url.query;
+
+	var attrs, params, title;
+	switch (url.pathname) {
+		case '/cc': {
+			title = 'Character Creator';
+			attrs = {
+				data: process.env.SWF_URL + '/cc.swf', // data: 'cc_.swf',
+				type: 'application/x-shockwave-flash', id: 'char_creator', width: '100%', height: '100%',
+			};
+			params = {
+				flashvars: {
+					'apiserver': '/', 'storePath': process.env.STORE_URL + '/<store>',
+					'clientThemePath': process.env.CLIENT_URL + '/<client_theme>', 'original_asset_id': query['id'] || null,
+					'themeId': 'business', 'ut': 60, 'bs': 'default', 'appCode': 'go', 'page': '', 'siteId': 'go',
+					'm_mode': 'school', 'isLogin': 'Y', 'isEmbed': 1, 'ctc': 'go', 'tlang': 'en_US',
+				},
+				allowScriptAccess: 'always',
+				movie: process.env.SWF_URL + '/cc.swf', // 'http://localhost/cc.swf'
+			};
+			break;
+		}
+
+		case '/cc_browser': {
+			title = 'Character Creator Browser';
+			attrs = {
+				data: process.env.SWF_URL + '/cc_browser.swf', // data: 'cc_browser_.swf',
+				type: 'application/x-shockwave-flash', id: 'char_creator', width: '100%', height: '100%',
+			};
+			params = {
+				flashvars: {
+					'apiserver': '/', 'storePath': process.env.STORE_URL + '/<store>',
+					'clientThemePath': process.env.CLIENT_URL + '/<client_theme>', 'original_asset_id': query['id'] || null,
+					'themeId': 'business', 'ut': 60, 'bs': 'default', 'appCode': 'go', 'page': '', 'siteId': 'go',
+					'm_mode': 'school', 'isLogin': 'Y', 'isEmbed': 1, 'ctc': 'go', 'tlang': 'en_US',
+				},
+				allowScriptAccess: 'always',
+				movie: process.env.SWF_URL + '/cc_browser.swf', // 'http://localhost/cc_browser.swf'
+			};
+			break;
+		}
+		
+		case '/go_full': {
+			let presave = query.movieId && query.movieId.startsWith('m') ? query.movieId :
+				`m-${fUtil[query.noAutosave ? 'getNextFileId' : 'fillNextFileId']('movie-', '.xml')}`;
+			title = 'Video Editor';
+			attrs = {
+				data: process.env.SWF_URL + '/go_full.swf',
+				type: 'application/x-shockwave-flash', width: '100%', height: '100%',
+			};
+			params = {
+				flashvars: {
+					'apiserver': '/', 'storePath': process.env.STORE_URL + '/<store>', 'isEmbed': 1, 'ctc': 'go',
+					'ut': 60, 'bs': 'default', 'appCode': 'go', 'page': '', 'siteId': 'go', 'lid': 13, 'isLogin': 'Y', 'retut': 1,
+					'clientThemePath': process.env.CLIENT_URL + '/<client_theme>', 'themeId': 'business', 'tlang': 'en_US',
+					'presaveId': presave, 'goteam_draft_only': 1, 'isWide': 1, 'nextUrl': '/pages/html/list.html',
+				},
+				allowScriptAccess: 'always',
+			};
+			sessions.set({ movieId: presave }, req);
+			break;
+		}
+
+		case '/player': {
+			title = 'Video Player';
+			attrs = {
+				data: process.env.SWF_URL + '/player.swf',
+				type: 'application/x-shockwave-flash', width: '100%', height: '100%',
+			};
+			params = {
+				flashvars: {
+					'apiserver': '/', 'storePath': process.env.STORE_URL + '/<store>', 'ut': 60,
+					'autostart': 1, 'isWide': 1, 'clientThemePath': process.env.CLIENT_URL + '/<client_theme>',
+				},
+				allowScriptAccess: 'always',
+			};
+			break;
+		}
+
+		default:
+			return;
+	}
+	res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+	Object.assign(params.flashvars, query);
+	res.end(`<script>document.title='${title}',flashvars=${JSON.stringify(params.flashvars)}</script><body style="margin:0px">${toObjectString(attrs, params)
+		}</body>${stuff.pages[url.pathname] || ''}`);
+	return true;
+}
+
+const loadPost = require('../request/post_body');
+const folder = process.env.PREMADE_FOLDER;
+const fs = require('fs');
+
+module.exports = function (req, res, url) {
+	if (req.method != 'POST' || url.path != '/goapi/getCCPreMadeCharacters') return;
+	loadPost(req, res).then(data => {
+		res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+		const p = `${folder}/${data.themeId}.xml`;
+		fs.createReadStream(p).pipe(res);
+	});
+	return true;
+}
+const loadPost = require('../request/post_body');
+const character = require('./main');
+
+module.exports = function (req, res, url) {
+	if (req.method != 'POST' || url.path != '/goapi/saveCCCharacter/') return;
+	loadPost(req, res).then(data => character.save(Buffer.from(data.body))).then(
+		e => e ? res.end('10') : res.end('00'));
+	return true;
+}
+const loadPost = require('../request/post_body');
+const character = require('./main');
+
+module.exports = function (req, res) {
+	switch (req.method) {
+		case 'GET': {
+			const match = req.url.match(/\/characters\/([^.]+)(?:\.xml)?$/);
+			if (!match) return;
+
+			var id = match[1];
+			res.setHeader('Content-Type', 'text/xml');
+			process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
+			character.load(id).then(v => { res.statusCode = 200, res.end(v) })
+				.catch(e => { res.statusCode = 404, res.end(e) })
+			return true;
+		}
+
+		case 'POST': {
+			if (req.url != '/goapi/getCcCharCompositionXml/') return;
+			loadPost(req, res).then(async data => {
+				console.log("Loading character: "+data.assetId||data.original_asset_id)
+				res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+				process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
+				character.load(data.assetId || data.original_asset_id)
+					.then(v => { res.statusCode = 200, res.end(0 + v) })
+					//.catch(e => { res.statusCode = 404, res.end(1 + e) })
+					//why send a 404 when you can watch benson on youtube
+					.catch(
+						() => character.load('a-400001007')
+						.then(v => {
+							console.log("Couldn't find that character, but it's okay, we loaded 2Epik4u because its wrapper online"),
+							res.statusCode = 200, res.end(0 + v)
+						})
+					).catch(e => {
+						console.log("But nobody came."),
+						res.statusCode = 404, res.end(1 + e)
+					});
+			});
+			return true;
+		}
+		default: return;
+	}
+}
+
+const xNumWidth = process.env.XML_NUM_WIDTH;
+const baseUrl = process.env.CHAR_BASE_URL;
+const folder = process.env.SAVED_FOLDER;
+const header = process.env.XML_HEADER;
+const fXml = process.env.FAILURE_XML;
+const fUtil = require('../fileUtil');
+const fw = process.env.FILE_WIDTH;
+const get = require('../request/get');
+const fs = require('fs');
+const themes = {};
+
+function addTheme(id, buffer) {
+	const beg = buffer.indexOf(`theme_id="`) + 10;
+	const end = buffer.indexOf(`"`, beg);
+	const theme = buffer.subarray(beg, end).toString();
+	return themes[id] = theme;
+}
+
+function save(id, data) {
+	fs.writeFileSync(fUtil.getFileIndex('char-', '.xml', id), data);
+	addTheme(id, data);
+	return id;
+}
+
+fUtil.getValidFileIndicies('char-', '.xml').map(n => {
+	return addTheme(`c-${n}`, fs.readFileSync(fUtil.getFileIndex('char-', '.xml', n)));
+});
+
+module.exports = {
+	/**
+	 * @param {string} id
+	 * @returns {Promise<string>}
+	 */
+	getTheme(id) {
+		return new Promise((res, rej) => {
+			if (themes[id]) res(themes[id]);
+			this.load(id).then(b => res(addTheme(id, b))).catch(rej);
+		});
+	},
+	/**
+	 * @param {string} id
+	 * @returns {Promise<Buffer>}
+	 */
+	load(id) {
+		return new Promise((res, rej) => {
+			const i = id.indexOf('-');
+			const prefix = id.substr(0, i);
+			const suffix = id.substr(i + 1);
+
+			switch (prefix) {
+				case 'c':
+					fs.readFile(fUtil.getFileIndex('char-', '.xml', suffix),
+						(e, b) => e ? rej(Buffer.from(fXml)) : res(b));
+					break;
+
+				case 'C':
+					fs.readFile(fUtil.getFileString('char-', '.xml', suffix),
+						(e, b) => e ? rej(Buffer.from(fXml)) : res(b));
+					break;
+
+				case 'a':
+				case '': // Blank prefix is left for compatibility purposes.
+					{
+						const nId = Number.parseInt(suffix);
+						const xmlSubId = nId % fw, fileId = nId - xmlSubId;
+						const lnNum = fUtil.padZero(xmlSubId, xNumWidth);
+						const url = `${baseUrl}/${fUtil.padZero(fileId)}.txt`;
+
+						get(url).then(b => {
+							var line = b.toString('utf8').split('\n').find(v => v.substr(0, xNumWidth) == lnNum);
+							line ? res(Buffer.from(line.substr(xNumWidth))) : rej(Buffer.from(fXml));
+						}).catch(e => rej(Buffer.from(fXml)));
+					}
+			}
+		});
+	},
+	/**
+	 * @param {Buffer} data
+	 * @param {string} id
+	 * @returns {Promise<string>}
+	 */
+	save(data, id) {
+		return new Promise((res, rej) => {
+			if (id) {
+				const i = id.indexOf('-');
+				const prefix = id.substr(0, i);
+				const suffix = id.substr(i + 1);
+				switch (prefix) {
+					case 'c':
+						return fs.writeFile(fUtil.getFileIndex('char-', '.xml', suffix), data, e => e ? rej() : res(id));
+					case 'C':
+						return fs.writeFile(fUtil.getFileString('char-', '.xml', suffix), data, e => e ? rej() : res(id));
+					default:
+						return res(save(id, data));
+				}
+			}
+			else {
+				saveId = fUtil.getNextFileId('char-', '.xml');
+				res(save(saveId, data));
+			};
+		});
+	},
+}
