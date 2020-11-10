@@ -1,0 +1,223 @@
+const loadPost = require('../request/post_body');
+const sessions = require('../data/sessions');
+const asset = require('./main');
+
+module.exports = function (req, res, url) {
+	switch (req.method) {
+		case 'GET': {
+			const match = req.url.match(/\/assets\/([^/]+)\/([^.]+)(?:\.xml)?$/);
+			if (!match) return;
+
+			const mId = match[1], aId = match[2];
+			const b = asset.loadLocal(mId, aId);
+			b ? (res.statusCode = 200, res.end(v)) :
+				(res.statusCode = 404, res.end(e));
+			return true;
+		}
+
+		case 'POST': {
+			if (url.path != '/goapi/getAsset/' && url.path != '/goapi/getAssetEx/') return;
+			loadPost(req, res).then(data => {
+				const mId = data.movieId || data.presaveId || sessions.get(req);
+				const aId = data.assetId || data.enc_asset_id;
+
+				const b = asset.loadLocal(mId, aId);
+				sessions.set({ movieId: mId }, req);
+				if (b) {
+					res.setHeader('Content-Length', b.length);
+					res.setHeader('Content-Type', 'audio/mp3');
+					res.end(b);
+				}
+				else {
+					res.statusCode = 404;
+					res.end();
+				};
+			});
+			return true;
+		}
+		default: return;
+	}
+}
+const chars = require('../character/main');
+const caché = require('../data/caché');
+const fUtil = require('../fileUtil');
+const info = require('./info');
+const fs = require('fs');
+
+function getFilter(prefix, idPrefix, types) {
+	const typeSet = {}, files = [], ret = [];
+	types.forEach(v => {
+		const names = fUtil.getValidFileNames(prefix, `.${v}`);
+		typeSet[v] = true, files.concat(names);
+	});
+	for (let c = 0; c < files.length; c++) {
+		const path = files[c];
+		const dot = path.lastIndexOf('.');
+		const dash = path.lastIndexOf('-');
+		const num = Number.parseInt(path.substr(dash + 1, dot));
+		const ext = path.substr(dot + 1), id = `${idPrefix}-${num}.${ext}`;
+		ret.push({ id: id, path: path, ext: ext, });
+	}
+	return ret;
+}
+
+module.exports = {
+	loadGlobal(aId) {
+		const dot = aId.indexOf('.');
+		const dash = aId.indexOf('-');
+		const prefix = aId.substr(0, dash);
+		const num = aId.substr(dash + 1, dot);
+		const suffix = aId.substr(dot);
+		const path = fUtil.getFileIndex(prefix, suffix, num);
+		return fs.readFileSync(path);
+	},
+	loadLocal(mId, aId) { return caché.load(mId, aId); },
+	saveLocal(buffer, mId, suff) { return caché.saveNew(buffer, mId, suff); },
+	getBackgrounds() { return getFilter('bg-', 'b', info.bg.filetypes); },
+	getProps() { return getFilter('prop-', 'p', info.prop.filetypes); },
+	getSounds() { return getFilter('sound-', 's', info.sound.filetypes); },
+	async chars(theme) {
+		switch (theme) {
+			case 'custom':
+				theme = 'family';
+				break;
+			case 'action':
+			case 'animal':
+			case 'space':
+			case 'vietnam':
+				theme = 'cc2';
+				break;
+		}
+
+		const table = [];
+		const ids = fUtil.getValidFileIndicies('char-', '.xml');
+		for (let c = 0; c < ids.length; c++) {
+			const v = ids[c];
+			const id = `c-${v}`;
+			if (theme == await chars.getTheme(id))
+				table.unshift({ theme: theme, id: id, });
+		}
+		return table;
+	},
+};
+const thumbUrl = process.env.THUMB_BASE_URL;
+const get = require('../request/get');
+
+module.exports = function (req, res, url) {
+	if (req.method != 'GET' || !url.path.startsWith('/stock_thumbs')) return;
+	get(thumbUrl + url.path.substr(url.path.lastIndexOf('/'))).then(v => res.end(v));
+	return true;
+}
+const formidable = require('formidable');
+const sessions = require('../data/sessions');
+const asset = require('./main');
+const fs = require('fs');
+
+module.exports = function (req, res, url) {
+	if (req.method != 'POST' || url.path != '/upload_asset/') return;
+	new formidable.IncomingForm().parse(req, (e, f, files) => {
+		const path = files.import.path, buffer = fs.readFileSync(path);
+		const mId = sessions.get(req).movieId;
+
+		const name = files.import.name;
+		const suffix = name.substr(name.lastIndexOf('.'));
+		asset.saveLocal(buffer, mId, suffix);
+		fs.unlinkSync(path);
+		res.end();
+	});
+	return true;
+}
+
+{
+	"bg": {
+		"filetypes": [
+			"jpg"
+		]
+	},
+	"prop": {
+		"filetypes": [
+			"png",
+			"jpg"
+		]
+	},
+	"sound": {
+		"filetypes": [
+			"mp3",
+			"wav"
+		]
+	}
+}
+const loadPost = require('../request/post_body');
+const header = process.env.XML_HEADER;
+const fUtil = require('../fileUtil');
+const nodezip = require('node-zip');
+const base = Buffer.alloc(1, 0);
+const asset = require('./main');
+
+async function listAssets(data, makeZip) {
+	var xmlString, files;
+	switch (data.type) {
+		case 'char': {
+			const chars = await asset.chars(data.themeId);
+			xmlString = `${header}<ugc more="0">${chars.map(v => `<char id="${v.id}" name="Untitled" cc_theme_id="${
+				v.theme}" thumbnail_url="char_default.png" copyable="Y"><tags/></char>`).join('')}</ugc>`;
+			break;
+		}
+		case 'bg': {
+			files = asset.getBackgrounds();
+			xmlString = `${header}<ugc more="0">${files.map(v => `<bg id="${v.id}"/>`)}</ugc>`;
+			break;
+		}
+		case 'prop':
+		default: {
+			xmlString = `${header}<ugc more="0"></ugc>`;
+			break;
+		}
+	};
+
+	if (makeZip) {
+		const zip = nodezip.create();
+		fUtil.addToZip(zip, 'desc.xml', Buffer.from(xmlString));
+
+		switch (data.type) {
+			case 'bg': {
+				for (let c = 0; c < files.length; c++) {
+					const file = files[c];
+					fUtil.addToZip(zip, `bg/${file.id}`, asset.loadLocal(file.id));
+				}
+				break;
+			}
+		};
+		return Buffer.concat([base, await zip.zip()]);
+	}
+	else
+		return Buffer.from(xmlString);
+}
+
+module.exports = function (req, res, url) {
+	var makeZip = false; switch (url.path) {
+		case '/goapi/getUserAssets/': makeZip = true; break;
+		case '/goapi/getUserAssetsXml/': break;
+		default: return;
+	}
+
+	switch (req.method) {
+		case 'GET': {
+			listAssets(url.query, makeZip).then(buff => {
+				const type = makeZip ? 'application/zip' : 'text/xml';
+				res.setHeader('Content-Type', type), res.end(buff);
+			});
+			return true;
+		}
+		case 'POST': {
+			loadPost(req, res).then(data => listAssets(data, makeZip)).then(buff => {
+				const type = makeZip ? 'application/zip' : 'text/xml';
+				res.setHeader('Content-Type', type), res.end(buff);
+			});
+			return true;
+		}
+		default: return;
+	}
+
+
+}
